@@ -3,7 +3,11 @@ extern crate lazy_static;
 
 mod util;
 
-use std::{cmp::{max, min}, fs::read_to_string};
+use core::num;
+use std::{
+    cmp::{max, min},
+    fs::read_to_string, fmt::format,
+};
 
 use rand::Rng;
 use regex::{Match, Regex};
@@ -14,7 +18,7 @@ use serenity::{
     Client,
 };
 
-use crate::util::get_circled_number;
+use crate::util::{roll, format_roll, Roll};
 
 #[tokio::main]
 async fn main() {
@@ -46,14 +50,26 @@ async fn on_message(ctx: Context, msg: Message) {
             d
             (?P<dice_size>\d+)
         )?
-        (?P<disadvantage1>d(?:is)?)?
-        (?P<advantage1>a(?:dv(?:antage)?)?)?
-        (?P<modifier>
-            [+-]
-            \d+
-        )?
-        (?P<disadvantage2>d(?:is)?)?
-        (?P<advantage2>a(?:dv(?:antage)?)?)?
+        (
+            (?:dl?(?P<drop_lowest>\d+))
+            |
+            (?:dh(?P<drop_highest>\d+))
+            |
+            (?:kl(?P<keep_lowest>\d+))
+            |
+            (?:kh?(?P<keep_highest>\d+))
+            |
+            (?P<disadvantage>d(?:is(?:adv(?:antage)?)?)?)
+            |
+            (?P<advantage>a(?:dv(?:antage)?)?)
+            |
+            (?:r(?:eroll)?(?P<reroll>\d+))
+            |
+            (?P<modifier>
+                [+-]
+                \d+
+            )
+        )*
         $
         "
         )
@@ -75,12 +91,19 @@ async fn on_message(ctx: Context, msg: Message) {
         if groups.name("dice_size").is_some() || groups.name("modifier").is_some() {
             let mut num_dice: i32 = parse(groups.name("num_dice"), 1).clamp(1, 100);
             let dice_size = parse(groups.name("dice_size"), 20);
-            let disadvantage =
-                groups.name("disadvantage1").is_some() || groups.name("disadvantage2").is_some();
-            let advantage = !disadvantage
-                && (groups.name("advantage1").is_some() || groups.name("advantage2").is_some());
+            let disadvantage = groups.name("disadvantage").is_some();
+            let advantage = groups.name("advantage").is_some();
+            let drop_lowest = parse(groups.name("drop_lowest"), 0);
+            let drop_highest = parse(groups.name("drop_highest"), 0);
+            let keep_lowest = parse(groups.name("keep_lowest"), 0);
+            let keep_highest = parse(groups.name("keep_highest"), 0);
+            let reroll = parse(groups.name("reroll"), 0);
             let modifier = parse(groups.name("modifier"), 0);
-            if dice_size <= 0 {
+            if dice_size <= 0 // invalid states
+                || drop_lowest + drop_highest + keep_lowest + keep_highest > num_dice - 1 // i.e. overlapping drops/keeps
+                || drop_lowest != 0 && keep_lowest != 0 // i.e. both dropping and keeping the same rolls
+                || drop_highest != 0 && keep_highest != 0
+            {
                 return;
             }
             if advantage || disadvantage {
@@ -103,37 +126,43 @@ async fn on_message(ctx: Context, msg: Message) {
             };
 
             let normalized = format!("{num_dice}d{dice_size}{modifier_str}{advantage_str}");
-            
+
             let result = if advantage || disadvantage {
-                let roll1 = rand::thread_rng().gen_range(1..=dice_size);
-                let roll2 = rand::thread_rng().gen_range(1..=dice_size);
+                let roll1 = roll(dice_size, reroll);
+                let roll2 = roll(dice_size, reroll);
 
-                let roll1_str = get_circled_number(roll1);
-                let roll2_str = get_circled_number(roll2);
+                let roll1_str = format_roll(&roll1, false);
+                let roll2_str = format_roll(&roll2, false);
 
-                let full_roll_str = if roll1 == roll2 {
+                let full_roll_str = if roll1.value == roll2.value {
                     format!("{roll1_str} / {roll2_str}")
-                } else if (advantage && roll1 > roll2) || (disadvantage && roll1 < roll2) {
+                } else if (advantage && roll1.value > roll2.value) || (disadvantage && roll1.value < roll2.value) {
                     format!("**{roll1_str}** / {roll2_str}")
                 } else {
                     format!("{roll1_str} / **{roll2_str}**")
                 };
 
-                let sum = modifier + if advantage {
-                    max(roll1, roll2)
-                } else {
-                    min(roll1, roll2)
-                };
+                let sum = modifier
+                    + if advantage {
+                        max(roll1.value, roll2.value)
+                    } else {
+                        min(roll1.value, roll2.value)
+                    };
 
                 format!("{full_roll_str}{modifier_str} → **{sum}**")
-
             } else if modifier == 0 && num_dice == 1 {
-                let roll = rand::thread_rng().gen_range(1..=dice_size);
-                get_circled_number(roll)
+                let roll = roll(dice_size, reroll);
+                format_roll(&roll, false)
             } else {
-                let rolls: Vec<i32> = (1..=num_dice).map(|_| rand::thread_rng().gen_range(1..=dice_size)).collect();
-                let sum: i32 = rolls.iter().sum::<i32>() + modifier;
-                let roll_str = rolls.iter().map(|roll| get_circled_number(*roll)).collect::<Vec<String>>().join(" + ");
+                let rolls: Vec<Roll> = (1..=num_dice)
+                    .map(|_| roll(dice_size, reroll))
+                    .collect();
+                let sum: i32 = rolls.iter().fold(modifier, |acc, roll| acc + roll.value);
+                let roll_str = rolls
+                    .iter()
+                    .map(|roll| format_roll(roll, false))
+                    .collect::<Vec<String>>()
+                    .join(" + ");
                 format!("{roll_str}{modifier_str} → **{sum}**")
             };
 
