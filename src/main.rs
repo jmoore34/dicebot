@@ -3,13 +3,11 @@ extern crate lazy_static;
 
 mod util;
 
-use core::num;
 use std::{
     cmp::{max, min},
-    fs::read_to_string, fmt::format,
+    fs::read_to_string,
 };
 
-use rand::Rng;
 use regex::{Match, Regex};
 use serenity::{
     async_trait,
@@ -18,7 +16,7 @@ use serenity::{
     Client,
 };
 
-use crate::util::{roll, format_roll, Roll};
+use crate::util::{format_roll, mark_rolls, roll, MarkCondition, Roll};
 
 #[tokio::main]
 async fn main() {
@@ -82,6 +80,15 @@ async fn on_message(ctx: Context, msg: Message) {
             None => default,
         }
     }
+    fn parse_option(group_match: Option<Match>, max_valid_value: i32) -> Option<i32> {
+        match group_match {
+            Some(group_match) => match group_match.as_str().parse::<i32>() {
+                Ok(num) if (1..=max_valid_value).contains(&num) => Some(num),
+                _ => None,
+            },
+            None => None,
+        }
+    }
 
     if msg.author.bot {
         return;
@@ -93,19 +100,13 @@ async fn on_message(ctx: Context, msg: Message) {
             let dice_size = parse(groups.name("dice_size"), 20);
             let disadvantage = groups.name("disadvantage").is_some();
             let advantage = groups.name("advantage").is_some();
-            let drop_lowest = parse(groups.name("drop_lowest"), 0);
-            let drop_highest = parse(groups.name("drop_highest"), 0);
-            let keep_lowest = parse(groups.name("keep_lowest"), 0);
-            let keep_highest = parse(groups.name("keep_highest"), 0);
+            // can't drop more than num_dice-1 or there's no dice left. similarly keeping any more than num_dice-1 doesn't make sense
+            let drop_lowest = parse_option(groups.name("drop_lowest"), num_dice - 1);
+            let drop_highest = parse_option(groups.name("drop_highest"), num_dice - 1);
+            let keep_lowest = parse_option(groups.name("keep_lowest"), num_dice - 1);
+            let keep_highest = parse_option(groups.name("keep_highest"), num_dice - 1);
             let reroll = parse(groups.name("reroll"), 0);
             let modifier = parse(groups.name("modifier"), 0);
-            if dice_size <= 0 // invalid states
-                || drop_lowest + drop_highest + keep_lowest + keep_highest > num_dice - 1 // i.e. overlapping drops/keeps
-                || drop_lowest != 0 && keep_lowest != 0 // i.e. both dropping and keeping the same rolls
-                || drop_highest != 0 && keep_highest != 0
-            {
-                return;
-            }
             if advantage || disadvantage {
                 num_dice = 1;
             }
@@ -125,7 +126,69 @@ async fn on_message(ctx: Context, msg: Message) {
                 ""
             };
 
-            let normalized = format!("{num_dice}d{dice_size}{modifier_str}{advantage_str}");
+            enum DropOrKeep {
+                Drop,
+                Keep,
+            }
+            let (drop_or_keep_amount, mark_condition, drop_or_keep) =
+                if let Some(amount) = drop_lowest {
+                    (
+                        Some(amount),
+                        Some(MarkCondition::Lowest),
+                        Some(DropOrKeep::Drop),
+                    )
+                } else if let Some(amount) = drop_highest {
+                    (
+                        Some(amount),
+                        Some(MarkCondition::Highest),
+                        Some(DropOrKeep::Drop),
+                    )
+                } else if let Some(amount) = keep_lowest {
+                    (
+                        Some(amount),
+                        Some(MarkCondition::Lowest),
+                        Some(DropOrKeep::Keep),
+                    )
+                } else if let Some(amount) = keep_highest {
+                    (
+                        Some(amount),
+                        Some(MarkCondition::Highest),
+                        Some(DropOrKeep::Keep),
+                    )
+                } else {
+                    ( None, None, None)
+                };
+            let drop_or_keep_str = {
+                let action = match drop_or_keep {
+                    Some(DropOrKeep::Drop) => "dropping",
+                    Some(DropOrKeep::Keep) => "keeping",
+                    None => ""
+                };
+                let condition = match mark_condition {
+                    Some(MarkCondition::Highest) => "highest",
+                    Some(MarkCondition::Lowest) => "lowest",
+                    None => ""
+                };
+                match drop_or_keep_amount {
+                    Some(amount) if amount == 1 => format!(", {action} {condition} roll"),
+                    Some(amount) => format!(", {action} {condition} {amount} rolls"),
+                    None => "".to_owned(),
+                }
+            };
+        
+
+            let reroll_str = if reroll > 0 {
+                let nums_string = (1..=reroll)
+                    .map(|i| format!("{i}s"))
+                    .collect::<Vec<String>>()
+                    .join("/");
+                format!(", rerolling {nums_string}")
+            } else {
+                "".to_owned()
+            };
+
+            let normalized =
+                format!("{num_dice}d{dice_size}{modifier_str}{advantage_str}{reroll_str}{drop_or_keep_str}");
 
             let result = if advantage || disadvantage {
                 let roll1 = roll(dice_size, reroll);
@@ -136,7 +199,9 @@ async fn on_message(ctx: Context, msg: Message) {
 
                 let full_roll_str = if roll1.value == roll2.value {
                     format!("{roll1_str} / {roll2_str}")
-                } else if (advantage && roll1.value > roll2.value) || (disadvantage && roll1.value < roll2.value) {
+                } else if (advantage && roll1.value > roll2.value)
+                    || (disadvantage && roll1.value < roll2.value)
+                {
                     format!("**{roll1_str}** / {roll2_str}")
                 } else {
                     format!("{roll1_str} / **{roll2_str}**")
@@ -154,15 +219,59 @@ async fn on_message(ctx: Context, msg: Message) {
                 let roll = roll(dice_size, reroll);
                 format_roll(&roll, false)
             } else {
-                let rolls: Vec<Roll> = (1..=num_dice)
-                    .map(|_| roll(dice_size, reroll))
-                    .collect();
-                let sum: i32 = rolls.iter().fold(modifier, |acc, roll| acc + roll.value);
-                let roll_str = rolls
-                    .iter()
-                    .map(|roll| format_roll(roll, false))
-                    .collect::<Vec<String>>()
-                    .join(" + ");
+                let rolls: Vec<Roll> = (1..=num_dice).map(|_| roll(dice_size, reroll)).collect();
+                let (roll_str, sum) = if let Some(drop_or_keep_amount) = drop_or_keep_amount {
+                    let marked =
+                        mark_rolls(&rolls, drop_or_keep_amount, mark_condition.unwrap());
+                    let roll_str = rolls
+                        .iter()
+                        .zip(marked.iter())
+                        .map(|(roll, is_marked)| {
+                            format_roll(
+                                roll,
+                                match drop_or_keep.as_ref().unwrap() {
+                                    DropOrKeep::Drop => *is_marked,
+                                    DropOrKeep::Keep => !*is_marked,
+                                },
+                            )
+                        })
+                        .collect::<Vec<String>>()
+                        .join(" + ");
+                    let sum = rolls
+                        .iter()
+                        .zip(marked.iter())
+                        .fold(modifier, |acc, (roll, is_marked)| {
+                            match drop_or_keep.as_ref().unwrap() {
+                                DropOrKeep::Drop => {
+                                    if *is_marked {
+                                        acc
+                                    } else {
+                                        acc + roll.value
+                                    }
+                                },
+                                DropOrKeep::Keep => {
+                                    if *is_marked {
+                                        acc + roll.value
+                                    } else {
+                                        acc
+                                    }
+                                },
+                            }
+                        });
+                    (roll_str, sum)
+                } else {
+                    let roll_str = rolls
+                        .iter()
+                        .map(|roll| format_roll(roll, false))
+                        .collect::<Vec<String>>()
+                        .join(" + ");
+                    let sum = rolls
+                        .iter()
+                        .fold(modifier, |acc, roll| {
+                            acc + roll.value
+                        });
+                    (roll_str, sum)
+                };
                 format!("{roll_str}{modifier_str} → **{sum}**")
             };
 
