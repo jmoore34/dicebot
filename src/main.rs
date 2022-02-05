@@ -43,6 +43,7 @@ async fn on_message(ctx: Context, msg: Message) {
         static ref RE: Regex = Regex::new(
             r"(?xi) # case insensitive & allow comments
         ^
+        (?:(?P<repeat1>\d+)\*)?
         (?:
             (?P<num_dice>\d+)?
             d
@@ -61,7 +62,7 @@ async fn on_message(ctx: Context, msg: Message) {
             |
             (?P<advantage>a(?:dv(?:antage)?)?)
             |
-            ((?:\*|rep(?:eat)?)(?P<repeat>\d+))
+            ((?:\*|rep(?:eat)?)(?P<repeat2>\d+))
             |
             (?:r(?:eroll)?(?P<reroll>\d+))
             |
@@ -108,13 +109,15 @@ async fn on_message(ctx: Context, msg: Message) {
             let keep_lowest = parse_option(groups.name("keep_lowest"), num_dice - 1);
             let keep_highest = parse_option(groups.name("keep_highest"), num_dice - 1);
             let reroll = parse(groups.name("reroll"), 0);
-            let repeat = parse(groups.name("repeat"), 1);
             let modifier = parse(groups.name("modifier"), 0);
-            if advantage || disadvantage {
-                num_dice = 1;
-            }
+            let repeat1 = parse(groups.name("repeat1"), 1); // repeat syntax can be at beginning or end/with other options
+            let repeat2 = parse(groups.name("repeat2"), 1);
+            let repeat = max(repeat1, repeat2);
             if repeat <= 0 {
                 return;
+            }
+            if advantage || disadvantage {
+                num_dice = 1;
             }
             let modifier_abs = modifier.abs();
             let modifier_str = if modifier > 0 {
