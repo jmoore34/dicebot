@@ -5,7 +5,8 @@ mod util;
 
 use std::{
     cmp::{max, min},
-    fs::read_to_string,
+    env,
+    fs::{read_to_string, File}, path::Path,
 };
 
 use regex::{Match, Regex};
@@ -20,16 +21,40 @@ use crate::util::{format_roll, mark_rolls, roll, MarkCondition, Roll};
 
 #[tokio::main]
 async fn main() {
-    println!("Hello, world!");
-    let bot_token = read_to_string("./BOT_TOKEN").expect("Failed to read file BOT_TOKEN");
+    let version = env!("CARGO_PKG_VERSION");
+    println!("DiceBot v{version}");
 
-    let mut client = Client::builder(&bot_token)
-        .event_handler(Handler)
-        .await
-        .expect("Error creating client");
+    let bot_token_filename = "./BOT_TOKEN.txt";
 
-    if let Err(why) = client.start().await {
-        println!("Client error: {:?}", why);
+    let bot_token = match env::var("BOT_TOKEN") {
+        Ok(token) if token.len() > 50 => Some(token.trim().to_owned()),
+        _ => match read_to_string(bot_token_filename) {
+            Ok(token) if token.len() > 50 => Some(token.trim().to_owned()),
+            _ => None,
+        },
+    };
+
+    match bot_token {
+        Some(token) => {
+            println!("Starting server.");
+            let mut client = Client::builder(&token)
+                .event_handler(Handler)
+                .await
+                .expect("Error creating client");
+
+            if let Err(why) = client.start().await {
+                println!("Client error: {:?}", why);
+            }
+        }
+        None => {
+            eprintln!("ERROR: Please provide a bot token, either by setting the BOT_TOKEN environmental variable or by placing it in the {bot_token_filename} file.");
+            if !Path::new(bot_token_filename).exists() {
+                match File::create(bot_token_filename) {
+                    Ok(_) => println!("INFO: Created empty {bot_token_filename} file."),
+                    Err(e) => eprintln!("ERROR: Failed to create empty {bot_token_filename}: {e:?}"),
+                }
+            }
+        },
     }
 }
 
@@ -201,87 +226,91 @@ async fn on_message(ctx: Context, msg: Message) {
             let normalized =
                 format!("{num_dice}d{dice_size}{modifier_str}{advantage_str}{reroll_str}{drop_or_keep_str}{repeat_str}");
 
-            let results = (0..repeat).map(|_idx| {
-                if advantage || disadvantage {
-                    let roll1 = roll(dice_size, reroll);
-                    let roll2 = roll(dice_size, reroll);
+            let results = (0..repeat)
+                .map(|_idx| {
+                    if advantage || disadvantage {
+                        let roll1 = roll(dice_size, reroll);
+                        let roll2 = roll(dice_size, reroll);
 
-                    let roll1_str = format_roll(&roll1, false);
-                    let roll2_str = format_roll(&roll2, false);
+                        let roll1_str = format_roll(&roll1, false);
+                        let roll2_str = format_roll(&roll2, false);
 
-                    let full_roll_str = if roll1.value == roll2.value {
-                        format!("{roll1_str} / {roll2_str}")
-                    } else if (advantage && roll1.value > roll2.value)
-                        || (disadvantage && roll1.value < roll2.value)
-                    {
-                        format!("**{roll1_str}** / {roll2_str}")
-                    } else {
-                        format!("{roll1_str} / **{roll2_str}**")
-                    };
-
-                    let sum = modifier
-                        + if advantage {
-                            max(roll1.value, roll2.value)
+                        let full_roll_str = if roll1.value == roll2.value {
+                            format!("{roll1_str} / {roll2_str}")
+                        } else if (advantage && roll1.value > roll2.value)
+                            || (disadvantage && roll1.value < roll2.value)
+                        {
+                            format!("**{roll1_str}** / {roll2_str}")
                         } else {
-                            min(roll1.value, roll2.value)
+                            format!("{roll1_str} / **{roll2_str}**")
                         };
 
-                    format!("{full_roll_str}{modifier_str} → **{sum}**")
-                } else if modifier == 0 && num_dice == 1 {
-                    let roll = roll(dice_size, reroll);
-                    format_roll(&roll, false)
-                } else {
-                    let rolls: Vec<Roll> =
-                        (1..=num_dice).map(|_| roll(dice_size, reroll)).collect();
-                    let (roll_str, sum) = if let Some(drop_or_keep_amount) = drop_or_keep_amount {
-                        let marked =
-                            mark_rolls(&rolls, drop_or_keep_amount, mark_condition.unwrap());
-                        let roll_str = rolls
-                            .iter()
-                            .zip(marked.iter())
-                            .map(|(roll, is_marked)| {
-                                format_roll(
-                                    roll,
-                                    match drop_or_keep.as_ref().unwrap() {
-                                        DropOrKeep::Drop => *is_marked,
-                                        DropOrKeep::Keep => !*is_marked,
-                                    },
-                                )
-                            })
-                            .collect::<Vec<String>>()
-                            .join(" + ");
-                        let sum = rolls.iter().zip(marked.iter()).fold(
-                            modifier,
-                            |acc, (roll, is_marked)| match drop_or_keep.as_ref().unwrap() {
-                                DropOrKeep::Drop => {
-                                    if *is_marked {
-                                        acc
-                                    } else {
-                                        acc + roll.value
-                                    }
-                                }
-                                DropOrKeep::Keep => {
-                                    if *is_marked {
-                                        acc + roll.value
-                                    } else {
-                                        acc
-                                    }
-                                }
-                            },
-                        );
-                        (roll_str, sum)
+                        let sum = modifier
+                            + if advantage {
+                                max(roll1.value, roll2.value)
+                            } else {
+                                min(roll1.value, roll2.value)
+                            };
+
+                        format!("{full_roll_str}{modifier_str} → **{sum}**")
+                    } else if modifier == 0 && num_dice == 1 {
+                        let roll = roll(dice_size, reroll);
+                        format_roll(&roll, false)
                     } else {
-                        let roll_str = rolls
-                            .iter()
-                            .map(|roll| format_roll(roll, false))
-                            .collect::<Vec<String>>()
-                            .join(" + ");
-                        let sum = rolls.iter().fold(modifier, |acc, roll| acc + roll.value);
-                        (roll_str, sum)
-                    };
-                    format!("{roll_str}{modifier_str} → **{sum}**")
-                }
-            }).collect::<Vec<String>>().join("\n");
+                        let rolls: Vec<Roll> =
+                            (1..=num_dice).map(|_| roll(dice_size, reroll)).collect();
+                        let (roll_str, sum) = if let Some(drop_or_keep_amount) = drop_or_keep_amount
+                        {
+                            let marked =
+                                mark_rolls(&rolls, drop_or_keep_amount, mark_condition.unwrap());
+                            let roll_str = rolls
+                                .iter()
+                                .zip(marked.iter())
+                                .map(|(roll, is_marked)| {
+                                    format_roll(
+                                        roll,
+                                        match drop_or_keep.as_ref().unwrap() {
+                                            DropOrKeep::Drop => *is_marked,
+                                            DropOrKeep::Keep => !*is_marked,
+                                        },
+                                    )
+                                })
+                                .collect::<Vec<String>>()
+                                .join(" + ");
+                            let sum = rolls.iter().zip(marked.iter()).fold(
+                                modifier,
+                                |acc, (roll, is_marked)| match drop_or_keep.as_ref().unwrap() {
+                                    DropOrKeep::Drop => {
+                                        if *is_marked {
+                                            acc
+                                        } else {
+                                            acc + roll.value
+                                        }
+                                    }
+                                    DropOrKeep::Keep => {
+                                        if *is_marked {
+                                            acc + roll.value
+                                        } else {
+                                            acc
+                                        }
+                                    }
+                                },
+                            );
+                            (roll_str, sum)
+                        } else {
+                            let roll_str = rolls
+                                .iter()
+                                .map(|roll| format_roll(roll, false))
+                                .collect::<Vec<String>>()
+                                .join(" + ");
+                            let sum = rolls.iter().fold(modifier, |acc, roll| acc + roll.value);
+                            (roll_str, sum)
+                        };
+                        format!("{roll_str}{modifier_str} → **{sum}**")
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join("\n");
 
             let complete_message = format!("Rolling {normalized}:\n{results}");
 
