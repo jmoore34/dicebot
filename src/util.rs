@@ -69,6 +69,7 @@ pub fn roll(dice_size: i32, reroll_if_less_than_or_equal_to: i32) -> Roll {
     }
 }
 
+#[derive(Copy, Clone)]
 pub enum MarkCondition {
     Highest,
     Lowest,
