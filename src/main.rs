@@ -112,10 +112,7 @@ async fn on_message(ctx: Context, msg: Message) {
             let modifier = parse(groups.name("modifier"), 0);
             let repeat1 = parse(groups.name("repeat1"), 1); // repeat syntax can be at beginning or end/with other options
             let repeat2 = parse(groups.name("repeat2"), 1);
-            let repeat = max(repeat1, repeat2);
-            if repeat <= 0 {
-                return;
-            }
+            let repeat = max(repeat1, repeat2).clamp(1, 20);
             if advantage || disadvantage {
                 num_dice = 1;
             }
