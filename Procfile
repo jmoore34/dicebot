@@ -1,1 +1,1 @@
-web: ./target/release/dicebot
+worker: ./target/release/dicebot
