@@ -1,46 +1,46 @@
 use std::cmp::{max, min};
 
+use indoc::indoc;
 use regex::{Match, Regex};
 
 use crate::util::{format_roll, mark_rolls, roll, MarkCondition, Roll};
 
 pub fn eval_dice_expression(expression: &str) -> Option<String> {
     lazy_static! {
-        static ref RE: Regex = Regex::new(
-            r"(?xi) # case insensitive & allow comments
-        ^
-        (?:(?P<repeat1>\d+)\*)?
-        (?:
-            (?P<num_dice>\d+)?
-            d
-            (?P<dice_size>\d+)
-        )?
-        (
-            (?:dl?(?P<drop_lowest>\d+))
-            |
-            (?:dh(?P<drop_highest>\d+))
-            |
-            (?:kl(?P<keep_lowest>\d+))
-            |
-            (?:kh?(?P<keep_highest>\d+))
-            |
-            (?P<disadvantage>d(?:is(?:adv(?:antage)?)?)?)
-            |
-            (?P<advantage>a(?:dv(?:antage)?)?)
-            |
-            ((?:\*|rep(?:eat)?)(?P<repeat2>\d+))
-            |
-            (?:r(?:eroll)?(?P<reroll>\d+))
-            |
-            (?P<modifier>
-                [+-]
-                \d+
-            )
-        )*
-        $
-        "
-        )
-        .unwrap();
+        // (indoc! removes leading whitespace at compile time)
+        static ref RE: Regex = Regex::new(indoc! {r"
+            (?xi) # case insensitive
+            ^
+            (?:(?P<repeat1>\d+)\*)?
+            (?:
+                (?P<num_dice>\d+)?
+                d
+                (?P<dice_size>\d+)
+            )?
+            (
+                (?:dl?(?P<drop_lowest>\d+))
+                |
+                (?:dh(?P<drop_highest>\d+))
+                |
+                (?:kl(?P<keep_lowest>\d+))
+                |
+                (?:kh?(?P<keep_highest>\d+))
+                |
+                (?P<disadvantage>d(?:is(?:adv(?:antage)?)?)?)
+                |
+                (?P<advantage>a(?:dv(?:antage)?)?)
+                |
+                ((?:\*|rep(?:eat)?)(?P<repeat2>\d+))
+                |
+                (?:r(?:eroll)?(?P<reroll>\d+))
+                |
+                (?P<modifier>
+                    [+-]
+                    \d+
+                )
+            )*
+            $
+        "}).unwrap();
     }
 
     fn parse(group_match: Option<Match>, default: i32) -> i32 {

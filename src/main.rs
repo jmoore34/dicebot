@@ -5,12 +5,12 @@ mod util;
 mod eval_dice_expression;
 
 use std::{
-    cmp::{max, min},
     env,
     fs::{read_to_string, File}, path::Path,
 };
 
-use regex::{Match, Regex};
+use indoc::indoc;
+use regex::{Regex};
 use serenity::{
     async_trait,
     client::{Context, EventHandler},
@@ -19,7 +19,6 @@ use serenity::{
 };
 
 
-use crate::util::{format_roll, mark_rolls, roll, MarkCondition, Roll};
 use crate::eval_dice_expression::{eval_dice_expression};
 
 #[tokio::main]
@@ -28,7 +27,7 @@ async fn main() {
     println!("DiceBot v{version}");
 
     let bot_token_filename = "./BOT_TOKEN.txt";
-
+    
     let bot_token = match env::var("BOT_TOKEN") {
         Ok(token) if token.len() > 50 => Some(token.trim().to_owned()),
         _ => match read_to_string(bot_token_filename) {
@@ -71,14 +70,34 @@ impl EventHandler for Handler {
         }
         if let Some(result) = eval_dice_expression(&msg.content) {
             if let Err(why) = msg.reply_ping(&ctx.http, result).await {
-                println!("Error sending message: {:?}", why);
+                eprintln!("Error sending message: {:?}", why);
             }
         }
         
-        if msg.content == "69" {
-            if let Err(why) = msg.channel_id.say(&ctx.http, "nice").await {
-                println!("Error sending message: {:?}", why);
+
+        if RANDCHAR_RE.is_match(&msg.content) {
+            let reply = indoc! {"
+                Example dice expression: `4d6r1k3*6`
+                `4d6`: Roll four 6-sided dice
+                `r1`: Reroll dice that land on <= 1
+                `k3`/`kh3`: Keep highest three rolls
+                (Alternatively: `d1`/`dl1`: Drop lowest roll, i.e. `4d6r1d1*6`)
+                `*6`: Repeat 6 times
+            "};
+            if let Err(why) = msg.channel_id.say(&ctx.http, reply).await {
+                eprintln!("Error sending message: {:?}", why);
+            }
+        }
+
+        if *(&msg.content.starts_with("dicebot version")) {
+            let version = env!("CARGO_PKG_VERSION");
+            let reply = format!("DiceBot v{version}");
+            if let Err(why) = msg.channel_id.say(&ctx.http, reply).await {
+                eprintln!("Error sending message: {:?}", why);
             }
         }
     }
+}
+lazy_static! {
+    static ref RANDCHAR_RE: Regex = Regex::new(r"(?i)^(?:(?:rand(?:om)?)|(?:roll))\s*char(?:acter)?").unwrap();
 }
