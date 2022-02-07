@@ -40,7 +40,7 @@ cd dicebot
 
 3. Install the [Heroku CLI](https://devcenter.heroku.com/articles/heroku-cli) and run `heroku login`.
    
-4. Go into the settings. Add a new config var setting BOT_TOKEN to your bot token (see "self-hosting" section above).
+4. Go into the settings. Add a new config var setting BOT_TOKEN to [your bot token](https://discordpy.readthedocs.io/en/stable/discord.html).
 
 5. Deploy the app:
 ```bash
@@ -50,3 +50,5 @@ git push heroku master
 ```
 
 6. Go into `Resources` and ensure the worker dyno is enabled.
+
+7. [Invite your bot](https://discordpy.readthedocs.io/en/stable/discord.html#inviting-your-bot) to your server.
