@@ -163,7 +163,11 @@ pub fn eval_dice_expression(expression: &str) -> Option<String> {
             let normalized =
                 format!("{num_dice}d{dice_size}{modifier_str}{advantage_str}{reroll_str}{drop_or_keep_str}{repeat_str}");
 
-            let results = (0..repeat)
+            struct Result {
+                result_str: String,
+                sum: i32
+            }
+            let aggregate_result = (0..repeat)
                 .map(|_idx| {
                     if advantage || disadvantage {
                         let roll1 = roll(dice_size, reroll);
@@ -189,10 +193,16 @@ pub fn eval_dice_expression(expression: &str) -> Option<String> {
                                 min(roll1.value, roll2.value)
                             };
 
-                        format!("{full_roll_str}{modifier_str} → **{sum}**")
+                        Result {
+                            result_str: format!("{full_roll_str}{modifier_str} → **{sum}**"),
+                            sum: sum
+                        }
                     } else if modifier == 0 && num_dice == 1 {
                         let roll = roll(dice_size, reroll);
-                        format_roll(&roll, false)
+                        Result {
+                            result_str: format_roll(&roll, false),
+                            sum: roll.value
+                        }
                     } else {
                         let rolls: Vec<Roll> =
                             (1..=num_dice).map(|_| roll(dice_size, reroll)).collect();
@@ -243,13 +253,33 @@ pub fn eval_dice_expression(expression: &str) -> Option<String> {
                             let sum = rolls.iter().fold(modifier, |acc, roll| acc + roll.value);
                             (roll_str, sum)
                         };
-                        format!("{roll_str}{modifier_str} → **{sum}**")
+                        Result {
+                            result_str: format!("{roll_str}{modifier_str} → **{sum}**"),
+                            sum: sum
+                        }
                     }
-                })
-                .collect::<Vec<String>>()
-                .join("\n");
+                }).reduce(|mut a, b| {
+                    // Aggregate the results
+                    Result {
+                        result_str: {
+                            a.result_str.push('\n');
+                            a.result_str.push_str(&b.result_str);
+                            a.result_str
+                        },
+                        sum: a.sum + b.sum
+                    }
+                }).unwrap();
 
-            Some(format!("Rolling {normalized}:\n{results}"))
+            // Show the grand total of all the repeated rolls, if applicable
+            let total_str = if repeat > 1 {
+                let total: i32 = aggregate_result.sum;
+                format!("\nTotal: **{total}**")
+            } else {
+                "".to_owned()
+            };
+
+            let result_str = aggregate_result.result_str;
+            Some(format!("Rolling {normalized}:\n{result_str}{total_str}"))
         } else {
             None
         }
